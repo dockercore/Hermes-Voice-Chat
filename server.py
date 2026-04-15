@@ -24,7 +24,7 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 HERMES_TIMEOUT = 120
 
 # Groq Whisper API
-GROQ_API_KEY = "REDACTED"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
