@@ -23,43 +23,28 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 HERMES_TIMEOUT = 120
 
-
-# ===== faster-whisper 常驻模型 =====
-whisper_model = None
-
-def get_whisper_model():
-    global whisper_model
-    if whisper_model is None:
-        from faster_whisper import WhisperModel
-        print("加载 faster-whisper 模型...")
-        whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-        print("faster-whisper 模型加载完成！")
-    return whisper_model
-
-
-async def convert_to_wav(input_path: str) -> str:
-    output_path = input_path.rsplit('.', 1)[0] + '_16k.wav'
-    proc = await asyncio.create_subprocess_exec(
-        'ffmpeg', '-y', '-i', input_path,
-        '-ar', '16000', '-ac', '1', '-f', 'wav', output_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await proc.communicate()
-    return output_path if Path(output_path).exists() else input_path
+# Groq Whisper API
+GROQ_API_KEY = "REDACTED"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 async def transcribe_audio(audio_path: str) -> str:
+    """Groq Whisper API 语音识别"""
     t0 = time.time()
-    model = get_whisper_model()
-    loop = asyncio.get_event_loop()
-    segments, info = await loop.run_in_executor(
-        None,
-        lambda: model.transcribe(audio_path, language="zh", beam_size=5)
-    )
-    text = "".join(seg.text for seg in segments).strip()
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+
+    with open(audio_path, "rb") as f:
+        resp = await client.audio.transcriptions.create(
+            model="whisper-large-v3",
+            file=f,
+            language="zh",
+        )
+
+    text = resp.text.strip()
     elapsed = time.time() - t0
-    print(f"[STT] {elapsed:.2f}s | {text}")
+    print(f"[STT/Groq] {elapsed:.2f}s | {text}")
     return text if text else "（识别为空，请重试）"
 
 
@@ -207,10 +192,9 @@ async def voice_chat(websocket: WebSocket):
                 tmp_webm = f"/tmp/voice_{tmp_id}.webm"
                 with open(tmp_webm, 'wb') as f:
                     f.write(audio_data)
-
                 try:
-                    wav_path = await convert_to_wav(tmp_webm)
-                    text = await transcribe_audio(wav_path)
+                    # STT - Groq 直接支持 webm
+                    text = await transcribe_audio(tmp_webm)
                     await websocket.send_json({"type": "user_text", "message": text})
 
                     if "失败" in text or "空" in text:
@@ -253,9 +237,8 @@ async def voice_chat(websocket: WebSocket):
                     except:
                         pass
                 finally:
-                    for f in [tmp_webm, wav_path]:
-                        try: os.unlink(f)
-                        except: pass
+                    try: os.unlink(tmp_webm)
+                    except: pass
 
     except WebSocketDisconnect:
         print("[WS] 客户端断开")
@@ -265,7 +248,7 @@ async def voice_chat(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    get_whisper_model()
+    print("Groq Whisper API 就绪，无需加载本地模型")
 
 
 if __name__ == "__main__":
