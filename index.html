@@ -117,6 +117,10 @@
     cursor: not-allowed;
     transform: none;
   }
+  .mic-button.interrupt {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    animation: pulse 0.6s infinite;
+  }
   .mic-button .ripple {
     position: absolute;
     width: 72px; height: 72px;
@@ -234,19 +238,25 @@ ws.onerror = () => {
   statusText.textContent = '连接错误';
 };
 
+// 当前播放的音频
+let currentAudio = null;
+
 ws.onmessage = (event) => {
   if (typeof event.data === 'string') {
     const data = JSON.parse(event.data);
     switch (data.type) {
       case 'status':
         statusText.textContent = data.message;
-        if (data.message.includes('思考')) {
+        if (data.message.includes('思考') || data.message.includes('执行') || data.message.includes('识别') || data.message.includes('生成')) {
           statusDot.classList.add('thinking');
-        } else if (data.message.includes('识别')) {
-          statusDot.classList.add('thinking');
+          // 处理中：麦克风变为打断按钮
+          micBtn.classList.add('interrupt');
+          micBtn.classList.remove('disabled');
+          micBtn.disabled = false;
         } else {
           statusDot.classList.remove('thinking');
           statusDot.classList.remove('recording');
+          micBtn.classList.remove('interrupt');
         }
         break;
       case 'user_text':
@@ -262,11 +272,25 @@ ws.onmessage = (event) => {
         playAudioBuffer();
         isProcessing = false;
         micBtn.classList.remove('disabled');
+        micBtn.classList.remove('interrupt');
+        break;
+      case 'interrupted':
+        // 服务端确认打断
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+        isProcessing = false;
+        micBtn.classList.remove('disabled');
+        micBtn.classList.remove('interrupt');
+        statusDot.classList.remove('thinking');
+        addMessage('system', '已打断');
         break;
       case 'error':
         addMessage('system', '错误: ' + data.message);
         isProcessing = false;
         micBtn.classList.remove('disabled');
+        micBtn.classList.remove('interrupt');
         break;
     }
   } else if (event.data instanceof Blob) {
@@ -288,9 +312,11 @@ async function playAudioBuffer() {
   const blob = new Blob(audioBuffer, { type: 'audio/ogg' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  currentAudio = audio;
   audio.play();
   statusText.textContent = '正在播放...';
   audio.onended = () => {
+    currentAudio = null;
     URL.revokeObjectURL(url);
     statusText.textContent = '按住麦克风说话';
   };
@@ -298,7 +324,23 @@ async function playAudioBuffer() {
 
 // 录音功能
 async function startRecording() {
-  if (isProcessing || isRecording) return;
+  // 如果正在处理或播放，先打断
+  if (isProcessing || currentAudio) {
+    // 停止音频播放
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+    // 发送打断请求给服务端
+    if (isProcessing) {
+      ws.send(JSON.stringify({ type: 'interrupt' }));
+      isProcessing = false;
+    }
+    micBtn.classList.remove('interrupt');
+    micBtn.classList.remove('disabled');
+    // 等一小会让打断生效
+    await new Promise(r => setTimeout(r, 100));
+  }
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
